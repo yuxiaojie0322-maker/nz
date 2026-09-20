@@ -114,55 +114,74 @@ server {
     listen 443 ssl;
     http2 on;
 
+    server_name _;
+
     ssl_certificate     $WORK_DIR/nezha.pem;
     ssl_certificate_key $WORK_DIR/nezha.key;
     ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:10m;
+    ssl_session_cache shared:SSL:50m;
     ssl_protocols TLSv1.2 TLSv1.3;
+
+    http2_max_concurrent_streams 10000;
+
+    keepalive_requests 2147483647;
+    keepalive_timeout 30d;
+    client_header_timeout 30d;
+    client_body_timeout 30d;
+    send_timeout 30d;
 
     underscores_in_headers on;
 
+    # 提取纯净密令并完美兼容新旧两套历史密令
+    set \$clean_secret \$http_client_secret;
+    if (\$http_client_secret ~* "(4Lw803GSbgNYiCQd2z7VlbQc8UjmUrgO|AW2e8luSprs3IdYYjg0r73ibIVrKK1uB)") {
+        set \$clean_secret "4Lw803GSbgNYiCQd2z7VlbQc8UjmUrgO";
+    }
+
     set \$real_ip \$remote_addr;
-    if (\$http_x_forwarded_for ~* "^([^,]+)") {
-        set \$real_ip \$1;
-    }
-    if (\$http_x_real_ip) {
-        set \$real_ip \$http_x_real_ip;
-    }
     if (\$http_cf_connecting_ip) {
         set \$real_ip \$http_cf_connecting_ip;
     }
+    if (\$http_x_forwarded_for ~* "^([^,]+)") {
+        set \$real_ip \$1;
+    }
 
+    # gRPC 探针长连接：直连 127.0.0.1:8008，绝不走 keepalive pool 避免 unexpected EOF
     location ^~ /proto.NezhaService/ {
         grpc_set_header Host \$host;
         grpc_set_header nz-realip \$real_ip;
-        grpc_set_header CF-Connecting-IP \$real_ip;
-        grpc_read_timeout 600s;
-        grpc_send_timeout 600s;
+        grpc_set_header client_secret \$clean_secret;
+        grpc_read_timeout 30d;
+        grpc_send_timeout 30d;
         grpc_socket_keepalive on;
-        client_max_body_size 10m;
-        grpc_buffer_size 4m;
-        grpc_pass grpc://dashboard;
+        client_max_body_size 50m;
+        grpc_buffer_size 8m;
+        grpc_pass grpc://127.0.0.1:8008;
     }
 
+    # WebSocket 实时推送
     location ~* ^/api/v1/ws/(server|terminal|file)(.*)\$ {
+        proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header nz-realip \$real_ip;
-        proxy_set_header CF-Connecting-IP \$real_ip;
-        proxy_set_header Origin https://\$host;
+        proxy_set_header Origin "";
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
+        proxy_connect_timeout 30d;
+        proxy_read_timeout 30d;
+        proxy_send_timeout 30d;
         proxy_pass http://127.0.0.1:8008;
     }
 
+    # Web 前端
     location / {
+        proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header nz-realip \$real_ip;
-        proxy_set_header CF-Connecting-IP \$real_ip;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 30d;
+        proxy_send_timeout 30d;
         proxy_buffer_size 128k;
         proxy_buffers 4 256k;
         proxy_busy_buffers_size 256k;
@@ -249,8 +268,8 @@ start_nginx_cloudflared() {
             chmod +x "$DL_TMP/$cf_bin"
             mv "$DL_TMP/$cf_bin" "$WORK_DIR/$cf_bin"
         fi
-        info "启动 cloudflared..."
-        TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --protocol http2 run >/dev/null 2>&1 &
+        info "启动 cloudflared (4 HA 连接)..."
+        TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --no-autoupdate --edge-ip-version auto --ha-connections 4 --protocol http2 run >/dev/null 2>&1 &
     fi
 
     ok "nginx + cloudflared 启动完成"
@@ -259,6 +278,11 @@ start_nginx_cloudflared() {
 # ========== 启动 dashboard ==========
 start_dashboard() {
     info "启动 dashboard..."
+    if [ -f "$WORK_DIR/data/config.yaml" ]; then
+        sed -i 's/^grpc_keepalive_time:.*/grpc_keepalive_time: 15s/' "$WORK_DIR/data/config.yaml"
+        sed -i 's/^grpc_keepalive_timeout:.*/grpc_keepalive_timeout: 20s/' "$WORK_DIR/data/config.yaml"
+        sed -i 's/^agent_secret_key:.*/agent_secret_key: 4Lw803GSbgNYiCQd2z7VlbQc8UjmUrgO/' "$WORK_DIR/data/config.yaml"
+    fi
     nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
     ok "dashboard 启动完成"
 }
