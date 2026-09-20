@@ -84,7 +84,134 @@ setup_ssl() {
 }
 
 # ========== nginx 配置 ==========
+
+# ========== 心跳平滑防闪退模块 (3分钟/180s) ==========
+create_smoother() {
+    cat << 'EOF' > /app/smoother.js
+(function() {
+  var OrigWS = window.WebSocket;
+  var cache = new Map();
+
+  function smooth(txt) {
+    try {
+      if (typeof txt === "string" && txt.indexOf('"servers"') !== -1) {
+        var d = JSON.parse(txt);
+        if (d && d.now && Array.isArray(d.servers)) {
+          var now = d.now;
+          for (var i = 0; i < d.servers.length; i++) {
+            var s = d.servers[i];
+            var isZero = !s.last_active || s.last_active.indexOf("000") === 0;
+            if (!isZero) {
+              cache.set(s.id, Date.parse(s.last_active));
+            } else if (cache.has(s.id)) {
+              var lastTs = cache.get(s.id);
+              if (now - lastTs <= 180000) {
+                s.last_active = new Date(lastTs).toISOString();
+              }
+            }
+          }
+          return JSON.stringify(d);
+        }
+      }
+    } catch(e) {}
+    return txt;
+  }
+
+  window.WebSocket = function() {
+    var ws = new (Function.prototype.bind.apply(OrigWS, [null].concat(Array.prototype.slice.call(arguments))))();
+    var origAdd = ws.addEventListener.bind(ws);
+    ws.addEventListener = function(type, fn, opt) {
+      if (type === "message") {
+        return origAdd(type, function(ev) {
+          var s = smooth(ev.data);
+          if (s !== ev.data) {
+            return fn.call(this, new MessageEvent("message", { data: s, origin: ev.origin, lastEventId: ev.lastEventId, source: ev.source, ports: ev.ports }));
+          }
+          return fn.call(this, ev);
+        }, opt);
+      }
+      return origAdd(type, fn, opt);
+    };
+
+    var _onmsg = null;
+    Object.defineProperty(ws, "onmessage", {
+      get: function() { return _onmsg; },
+      set: function(fn) {
+        if (!fn) { _onmsg = null; ws.onmessage = null; return; }
+        _onmsg = fn;
+        var wrapped = function(ev) {
+          var s = smooth(ev.data);
+          if (s !== ev.data) {
+            return fn.call(this, new MessageEvent("message", { data: s, origin: ev.origin, lastEventId: ev.lastEventId, source: ev.source, ports: ev.ports }));
+          }
+          return fn.call(this, ev);
+        };
+        var prop = Object.getOwnPropertyDescriptor(WebSocket.prototype, "onmessage");
+        if (prop && prop.set) prop.set.call(ws, wrapped);
+      }
+    });
+
+    return ws;
+  };
+
+  window.WebSocket.prototype = OrigWS.prototype;
+  window.WebSocket.CONNECTING = OrigWS.CONNECTING;
+  window.WebSocket.OPEN = OrigWS.OPEN;
+  window.WebSocket.CLOSING = OrigWS.CLOSING;
+  window.WebSocket.CLOSED = OrigWS.CLOSED;
+})();
+EOF
+}
+
 create_nginx_config() {
+
+    cat << 'EOF' > /etc/nginx/conf.d/web_filter.conf
+server {
+    listen 8080;
+    server_name _;
+
+    location = /smoother.js {
+        alias /app/smoother.js;
+        add_header Content-Type application/javascript;
+    }
+
+    location /assets/ {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Accept-Encoding "";
+        sub_filter_types application/javascript text/javascript;
+        sub_filter '<=3e4' '<=18e4';
+        sub_filter_once off;
+        proxy_pass http://127.0.0.1:8008;
+    }
+
+    location ~* ^/api/v1/ws/(server|terminal|file)(.*)$ {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header nz-realip $http_cf_connecting_ip;
+        proxy_set_header Origin "";
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_connect_timeout 30d;
+        proxy_read_timeout 30d;
+        proxy_send_timeout 30d;
+        proxy_pass http://127.0.0.1:8008;
+    }
+
+    location / {
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header nz-realip $http_cf_connecting_ip;
+        proxy_set_header Accept-Encoding "";
+        sub_filter '</head>' '<script src="/smoother.js"></script></head>';
+        sub_filter_once on;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_pass http://127.0.0.1:8008;
+    }
+}
+EOF
+
     cat << 'EOF' > /etc/nginx/conf.d/default.conf
 map $http_x_forwarded_for $xff_first_ip {
     default "";
@@ -369,6 +496,7 @@ main() {
 
     step "2/6 初始化 nginx / SSL"
     setup_ssl
+    create_smoother
     create_nginx_config
     optimize_nginx_main_conf
 
