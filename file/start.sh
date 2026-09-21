@@ -396,7 +396,7 @@ start_nginx_cloudflared() {
             mv "$DL_TMP/$cf_bin" "$WORK_DIR/$cf_bin"
         fi
         info "启动 cloudflared (4 HA 连接)..."
-        TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --no-autoupdate --edge-ip-version auto --ha-connections 4 --protocol http2 run >/dev/null 2>&1 &
+        TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --no-autoupdate --edge-ip-version auto --ha-connections 4 --protocol quic --metrics 127.0.0.1:20241 run >>"$WORK_DIR/data/cloudflared.log" 2>&1 &
     fi
 
     ok "nginx + cloudflared 启动完成"
@@ -633,6 +633,25 @@ while true; do
         [ -f "renew.sh" ] && ./renew.sh
     else
         sub "已锁定版本 $DASHBOARD_VERSION，跳过更新检查"
+    fi
+
+
+    # ---------- cloudflared 健康检查 ----------
+    if [ -n "${ARGO_AUTH:-}" ]; then
+        cf_bin="cloudflared-linux-${ARCH}"
+        cf_health=$(curl -s --max-time 5 http://127.0.0.1:20241/ready 2>/dev/null)
+        cf_ready=$(echo "$cf_health" | grep -o '"readyConnections":[0-9]*' | grep -o '[0-9]*')
+        if ! pgrep -f "$cf_bin" >/dev/null 2>&1 || [ -z "$cf_ready" ] || [ "$cf_ready" -eq 0 ]; then
+            warn "cloudflared 不健康 (ready=${cf_ready:-null})，重启中..."
+            kill -9 $(pgrep -f "$cf_bin") 2>/dev/null || true
+            sleep 2
+            > "$WORK_DIR/data/cloudflared.log"
+            TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --no-autoupdate --edge-ip-version auto --ha-connections 4 --protocol quic --metrics 127.0.0.1:20241 run >>"$WORK_DIR/data/cloudflared.log" 2>&1 &
+            sleep 5
+            info "cloudflared 已重启"
+        else
+            sub "cloudflared 健康 (ready=$cf_ready)"
+        fi
     fi
 
     sleep 3600
