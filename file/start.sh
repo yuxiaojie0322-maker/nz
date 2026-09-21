@@ -173,7 +173,7 @@ server {
 SSLEOF
 
 # ========== 8080 端口 (Northflank/HTTP) ==========
-    cat << 'HTTPEOF' > /etc/nginx/conf.d/http8080.conf
+    cat << HTTPEOF > /etc/nginx/conf.d/http8080.conf
 server {
     listen 8080;
     server_name _;
