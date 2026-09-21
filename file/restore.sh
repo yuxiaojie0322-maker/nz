@@ -40,7 +40,7 @@ if [ "$HTTP_CODE" != "200" ]; then
     warn "分支不存在: $GITHUB_BRANCH (HTTP $HTTP_CODE)，跳过"
     exit 0
 fi
-ok "分支检查通过"
+ok "分支���查通过"
 
 # ---------- 3. 拉取文件列表 ----------
 FILE_LIST=$(curl $CURL_OPTS -H "Authorization: token $GITHUB_TOKEN" \
@@ -80,7 +80,7 @@ if echo "$README_TRIMMED" | grep -qE '^data-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-
     fi
 fi
 
-# 5.3 没指定 / 指定无效 → 回退最新
+# 5.3 没指定 / 指定无效 → 回���最新
 if [ -z "$BACKUP_FILE" ]; then
     BACKUP_FILE=$(echo "$FILE_LIST" | grep '^data-.*\.zip$' | sort -r | head -n1)
     if [ -z "$BACKUP_FILE" ]; then
@@ -134,22 +134,23 @@ else
     exit 0
 fi
 
-# ---------- 9. 备份现有数据 ----------
+# ---------- 9. 备份现有数据（mv，只留最近 1 份） ----------
 if [ -d "$WORK_DIR/data" ] && [ -f "$WORK_DIR/data/sqlite.db" ]; then
     BACKUP_EXISTING="${WORK_DIR}/data.bak.$(date +%s)"
-    info "归档现有数据到: $BACKUP_EXISTING"
-    cp -rf "$WORK_DIR/data" "$BACKUP_EXISTING" 2>/dev/null || true
+    info "移动现有数据到: $BACKUP_EXISTING"
+    if ! mv "$WORK_DIR/data" "$BACKUP_EXISTING"; then
+        warn "移动失败，跳过恢复"
+        exit 0
+    fi
     ls -dt "$WORK_DIR"/data.bak.* 2>/dev/null | tail -n +2 | xargs -r rm -rf
     ok "现有数据已归档"
 fi
 
 # ---------- 10. 恢复数据到 /app/data ----------
 mkdir -p "$WORK_DIR/data"
-cp -rf "$EXTRACT_DATA"/* "$WORK_DIR/data/" 2>/dev/null || true
-if [ -f "$WORK_DIR/data/config.yaml" ]; then
-    sed -i 's/^grpc_keepalive_time:.*/grpc_keepalive_time: 15s/' "$WORK_DIR/data/config.yaml"
-    sed -i 's/^grpc_keepalive_timeout:.*/grpc_keepalive_timeout: 20s/' "$WORK_DIR/data/config.yaml"
-    sed -i 's/^agent_secret_key:.*/agent_secret_key: 4Lw803GSbgNYiCQd2z7VlbQc8UjmUrgO/' "$WORK_DIR/data/config.yaml"
+if ! mv "$EXTRACT_DATA"/* "$WORK_DIR/data/" 2>/dev/null; then
+    warn "移动数据文件失败"
+    exit 0
 fi
 ok "数据已恢复"
 

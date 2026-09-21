@@ -80,7 +80,7 @@ Token 格式：`github_pat_xxxxxxxxxxxx`
 
 | 选项 | 值 | 说明 |
 |---|---|---|
-| **不进行 TLS 验证** | ✅ 开 | 容器内使用的是自签名证书，Cloudflare 默认会校验证书链，开启后跳过校验，否则会报 `x509: certificate signed by unknown authority` |
+| **不进行 TLS 验证** | ✅ 开 | 容器内使用的是自签名证书，Cloudflare 默认会校验证书链，开启后���过校验，否则会报 `x509: certificate signed by unknown authority` |
 | **HTTP2 连接** | ✅ 开 | Agent 通过 HTTP/2 gRPC 上报数据，必须用 HTTP/2 连接才能正常通信 |
 
 
@@ -147,7 +147,7 @@ Token 格式：`github_pat_xxxxxxxxxxxx`
 
 ```text
 data-2026-09-18-02-30-00.zip
-├── config.yml              ← agent 配置（含 client_secret + uuid）
+├── config.yml              ��� agent 配置（含 client_secret + uuid）
 └── data/
     ├── config.yaml         ← dashboard 配置（含 client_secret）
     └── sqlite.db           ← dashboard 数据库
@@ -229,7 +229,7 @@ main()
 - 等待 50 秒后自动触发首次备份，把 `data/` + `config.yml` 上传。
 - 备份成功后，下次启动进入常规启动分支，一般不再需要 `NZ_UUID`。
 
-## 4.3 常规启动（GitHub 有备份）
+## 4.3 常规启���（GitHub 有备份）
 
 ```text
 ├─ start_nginx_cloudflared
@@ -334,7 +334,7 @@ backup
 data-2026-08-18-14-30-00.zip
 ```
 
-重新部署容器时会恢复指定备份；如果该文件不存在，自动回退到最新备份。
+重新部���容器时会恢复指定备份；如果该文件不存在，自动回退到最新备份。
 
 > ⚠️ 内容必须**只有文件名本身**，格式须为 `data-YYYY-MM-DD-HH-mm-ss.zip`。
 
@@ -535,7 +535,7 @@ Cloudflare Tunnel 配**一条规则**：
 └── file/
     ├── start.sh       # 入口：下载、启动、恢复、定时循环
     ├── backup.sh      # 备份：打包上传 GitHub
-    ├── restore.sh     # 恢复：下载解压覆盖
+    ├── restore.sh     # 恢复：���载解压覆盖
     ├── restart.sh     # 重启 dashboard
     └── renew.sh       # 检查更新 dashboard / agent
 ```
@@ -571,7 +571,7 @@ Cloudflare Tunnel 配**一条规则**：
 | 面板打开但探针离线 | Cloudflare 未开启 gRPC：选择域名 → 网络 → 打开 gRPC 开关 |
 | 面板打开但终端/文件管理连不上 | Cloudflare 未开启 WebSockets：同上位置打开 WebSockets 开关 |
 | 面板打开但 Agent 离线 | 检查 `config.yml` 里的 `client_secret` 是否与 `data/config.yaml` 的 `agent_secret_key` 一致 |
-| 恢复后 Agent 没启动 | 检查备份里是否有 `config.yml`；若没有，需设置 `NZ_UUID` 让脚本重新生成 |
+| 恢复后 Agent 没启动 | 检查备份里是否有 `config.yml`；若没有，需设置 `NZ_UUID` 让脚���重新生成 |
 | 手动备份没触发 | README 内容必须只有 `backup`（6 个字符，无多余空格换行） |
 | 指定恢复没生效 | README 内容必须只有 `data-xxx.zip`，且该文件确实存在于仓库中 |
 | 面板版本没更新 | `DASHBOARD_VERSION` 已设置会锁定版本，改为留空即可跟随最新 |

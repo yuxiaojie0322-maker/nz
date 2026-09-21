@@ -84,134 +84,7 @@ setup_ssl() {
 }
 
 # ========== nginx 配置 ==========
-
-# ========== 心跳平滑防闪退模块 (3分钟/180s) ==========
-create_smoother() {
-    cat << 'EOF' > /app/smoother.js
-(function() {
-  var OrigWS = window.WebSocket;
-  var cache = new Map();
-
-  function smooth(txt) {
-    try {
-      if (typeof txt === "string" && txt.indexOf('"servers"') !== -1) {
-        var d = JSON.parse(txt);
-        if (d && d.now && Array.isArray(d.servers)) {
-          var now = d.now;
-          for (var i = 0; i < d.servers.length; i++) {
-            var s = d.servers[i];
-            var isZero = !s.last_active || s.last_active.indexOf("000") === 0;
-            if (!isZero) {
-              cache.set(s.id, Date.parse(s.last_active));
-            } else if (cache.has(s.id)) {
-              var lastTs = cache.get(s.id);
-              if (now - lastTs <= 180000) {
-                s.last_active = new Date(lastTs).toISOString();
-              }
-            }
-          }
-          return JSON.stringify(d);
-        }
-      }
-    } catch(e) {}
-    return txt;
-  }
-
-  window.WebSocket = function() {
-    var ws = new (Function.prototype.bind.apply(OrigWS, [null].concat(Array.prototype.slice.call(arguments))))();
-    var origAdd = ws.addEventListener.bind(ws);
-    ws.addEventListener = function(type, fn, opt) {
-      if (type === "message") {
-        return origAdd(type, function(ev) {
-          var s = smooth(ev.data);
-          if (s !== ev.data) {
-            return fn.call(this, new MessageEvent("message", { data: s, origin: ev.origin, lastEventId: ev.lastEventId, source: ev.source, ports: ev.ports }));
-          }
-          return fn.call(this, ev);
-        }, opt);
-      }
-      return origAdd(type, fn, opt);
-    };
-
-    var _onmsg = null;
-    Object.defineProperty(ws, "onmessage", {
-      get: function() { return _onmsg; },
-      set: function(fn) {
-        if (!fn) { _onmsg = null; ws.onmessage = null; return; }
-        _onmsg = fn;
-        var wrapped = function(ev) {
-          var s = smooth(ev.data);
-          if (s !== ev.data) {
-            return fn.call(this, new MessageEvent("message", { data: s, origin: ev.origin, lastEventId: ev.lastEventId, source: ev.source, ports: ev.ports }));
-          }
-          return fn.call(this, ev);
-        };
-        var prop = Object.getOwnPropertyDescriptor(WebSocket.prototype, "onmessage");
-        if (prop && prop.set) prop.set.call(ws, wrapped);
-      }
-    });
-
-    return ws;
-  };
-
-  window.WebSocket.prototype = OrigWS.prototype;
-  window.WebSocket.CONNECTING = OrigWS.CONNECTING;
-  window.WebSocket.OPEN = OrigWS.OPEN;
-  window.WebSocket.CLOSING = OrigWS.CLOSING;
-  window.WebSocket.CLOSED = OrigWS.CLOSED;
-})();
-EOF
-}
-
 create_nginx_config() {
-
-    cat << 'EOF' > /etc/nginx/conf.d/web_filter.conf
-server {
-    listen 8080;
-    server_name _;
-
-    location = /smoother.js {
-        alias /app/smoother.js;
-        add_header Content-Type application/javascript;
-    }
-
-    location /assets/ {
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header Accept-Encoding "";
-        sub_filter_types application/javascript text/javascript;
-        sub_filter '<=3e4' '<=18e4';
-        sub_filter_once off;
-        proxy_pass http://127.0.0.1:8008;
-    }
-
-    location ~* ^/api/v1/ws/(server|terminal|file)(.*)$ {
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header nz-realip $http_cf_connecting_ip;
-        proxy_set_header Origin "";
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_connect_timeout 30d;
-        proxy_read_timeout 30d;
-        proxy_send_timeout 30d;
-        proxy_pass http://127.0.0.1:8008;
-    }
-
-    location / {
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header nz-realip $http_cf_connecting_ip;
-        proxy_set_header Accept-Encoding "";
-        sub_filter '</head>' '<script src="/smoother.js"></script></head>';
-        sub_filter_once on;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_pass http://127.0.0.1:8008;
-    }
-}
-EOF
-
     cat << 'EOF' > /etc/nginx/conf.d/default.conf
 map $http_x_forwarded_for $xff_first_ip {
     default "";
@@ -241,74 +114,55 @@ server {
     listen 443 ssl;
     http2 on;
 
-    server_name _;
-
     ssl_certificate     $WORK_DIR/nezha.pem;
     ssl_certificate_key $WORK_DIR/nezha.key;
     ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:50m;
+    ssl_session_cache shared:SSL:10m;
     ssl_protocols TLSv1.2 TLSv1.3;
-
-    http2_max_concurrent_streams 10000;
-
-    keepalive_requests 2147483647;
-    keepalive_timeout 30d;
-    client_header_timeout 30d;
-    client_body_timeout 30d;
-    send_timeout 30d;
 
     underscores_in_headers on;
 
-    # 提取纯净密令并完美兼容新旧两套历史密令
-    set \$clean_secret \$http_client_secret;
-    if (\$http_client_secret ~* "(4Lw803GSbgNYiCQd2z7VlbQc8UjmUrgO|AW2e8luSprs3IdYYjg0r73ibIVrKK1uB)") {
-        set \$clean_secret "4Lw803GSbgNYiCQd2z7VlbQc8UjmUrgO";
-    }
-
     set \$real_ip \$remote_addr;
-    if (\$http_cf_connecting_ip) {
-        set \$real_ip \$http_cf_connecting_ip;
-    }
     if (\$http_x_forwarded_for ~* "^([^,]+)") {
         set \$real_ip \$1;
     }
+    if (\$http_x_real_ip) {
+        set \$real_ip \$http_x_real_ip;
+    }
+    if (\$http_cf_connecting_ip) {
+        set \$real_ip \$http_cf_connecting_ip;
+    }
 
-    # gRPC 探针长连接：直连 127.0.0.1:8008，绝不走 keepalive pool 避免 unexpected EOF
     location ^~ /proto.NezhaService/ {
         grpc_set_header Host \$host;
         grpc_set_header nz-realip \$real_ip;
-        grpc_set_header client_secret \$clean_secret;
-        grpc_read_timeout 30d;
-        grpc_send_timeout 30d;
+        grpc_set_header CF-Connecting-IP \$real_ip;
+        grpc_read_timeout 600s;
+        grpc_send_timeout 600s;
         grpc_socket_keepalive on;
-        client_max_body_size 50m;
-        grpc_buffer_size 8m;
-        grpc_pass grpc://127.0.0.1:8008;
+        client_max_body_size 10m;
+        grpc_buffer_size 4m;
+        grpc_pass grpc://dashboard;
     }
 
-    # WebSocket 实时推送
     location ~* ^/api/v1/ws/(server|terminal|file)(.*)\$ {
-        proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header nz-realip \$real_ip;
-        proxy_set_header Origin "";
+        proxy_set_header CF-Connecting-IP \$real_ip;
+        proxy_set_header Origin https://\$host;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
-        proxy_connect_timeout 30d;
-        proxy_read_timeout 30d;
-        proxy_send_timeout 30d;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
         proxy_pass http://127.0.0.1:8008;
     }
 
-    # Web 前端
     location / {
-        proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header nz-realip \$real_ip;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_read_timeout 30d;
-        proxy_send_timeout 30d;
+        proxy_set_header CF-Connecting-IP \$real_ip;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
         proxy_buffer_size 128k;
         proxy_buffers 4 256k;
         proxy_busy_buffers_size 256k;
@@ -317,6 +171,65 @@ server {
     }
 }
 SSLEOF
+
+# ========== 8080 端口 (Northflank/HTTP) ==========
+    cat << 'HTTPEOF' > /etc/nginx/conf.d/http8080.conf
+server {
+    listen 8080;
+    server_name _;
+
+    underscores_in_headers on;
+
+    set \$real_ip \$remote_addr;
+    if (\$http_x_forwarded_for ~* "^([^,]+)") {
+        set \$real_ip \$1;
+    }
+    if (\$http_x_real_ip) {
+        set \$real_ip \$http_x_real_ip;
+    }
+    if (\$http_cf_connecting_ip) {
+        set \$real_ip \$http_cf_connecting_ip;
+    }
+
+    location ^~ /proto.NezhaService/ {
+        grpc_set_header Host \$host;
+        grpc_set_header nz-realip \$real_ip;
+        grpc_set_header CF-Connecting-IP \$real_ip;
+        grpc_read_timeout 600s;
+        grpc_send_timeout 600s;
+        grpc_socket_keepalive on;
+        client_max_body_size 10m;
+        grpc_buffer_size 4m;
+        grpc_pass grpc://dashboard;
+    }
+
+    location ~* ^/api/v1/ws/(server|terminal|file)(.*)\$ {
+        proxy_set_header Host \$host;
+        proxy_set_header nz-realip \$real_ip;
+        proxy_set_header CF-Connecting-IP \$real_ip;
+        proxy_set_header Origin https://\$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_pass http://127.0.0.1:8008;
+    }
+
+    location / {
+        proxy_set_header Host \$host;
+        proxy_set_header nz-realip \$real_ip;
+        proxy_set_header CF-Connecting-IP \$real_ip;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffer_size 128k;
+        proxy_buffers 4 256k;
+        proxy_busy_buffers_size 256k;
+        proxy_max_temp_file_size 0;
+        proxy_pass http://127.0.0.1:8008;
+    }
+}
+HTTPEOF
+
     ok "nginx 配置写入完成"
 }
 
@@ -395,8 +308,8 @@ start_nginx_cloudflared() {
             chmod +x "$DL_TMP/$cf_bin"
             mv "$DL_TMP/$cf_bin" "$WORK_DIR/$cf_bin"
         fi
-        info "启动 cloudflared (4 HA 连接)..."
-        TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --no-autoupdate --edge-ip-version auto --ha-connections 4 --protocol quic --metrics 127.0.0.1:20241 run >>"$WORK_DIR/data/cloudflared.log" 2>&1 &
+        info "启动 cloudflared..."
+        TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --protocol http2 run >/dev/null 2>&1 &
     fi
 
     ok "nginx + cloudflared 启动完成"
@@ -405,11 +318,6 @@ start_nginx_cloudflared() {
 # ========== 启动 dashboard ==========
 start_dashboard() {
     info "启动 dashboard..."
-    if [ -f "$WORK_DIR/data/config.yaml" ]; then
-        sed -i 's/^grpc_keepalive_time:.*/grpc_keepalive_time: 15s/' "$WORK_DIR/data/config.yaml"
-        sed -i 's/^grpc_keepalive_timeout:.*/grpc_keepalive_timeout: 20s/' "$WORK_DIR/data/config.yaml"
-        sed -i 's/^agent_secret_key:.*/agent_secret_key: 4Lw803GSbgNYiCQd2z7VlbQc8UjmUrgO/' "$WORK_DIR/data/config.yaml"
-    fi
     nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
     ok "dashboard 启动完成"
 }
@@ -496,7 +404,6 @@ main() {
 
     step "2/6 初始化 nginx / SSL"
     setup_ssl
-    create_smoother
     create_nginx_config
     optimize_nginx_main_conf
 
@@ -633,25 +540,6 @@ while true; do
         [ -f "renew.sh" ] && ./renew.sh
     else
         sub "已锁定版本 $DASHBOARD_VERSION，跳过更新检查"
-    fi
-
-
-    # ---------- cloudflared 健康检查 ----------
-    if [ -n "${ARGO_AUTH:-}" ]; then
-        cf_bin="cloudflared-linux-${ARCH}"
-        cf_health=$(curl -s --max-time 5 http://127.0.0.1:20241/ready 2>/dev/null)
-        cf_ready=$(echo "$cf_health" | grep -o '"readyConnections":[0-9]*' | grep -o '[0-9]*')
-        if ! pgrep -f "$cf_bin" >/dev/null 2>&1 || [ -z "$cf_ready" ] || [ "$cf_ready" -eq 0 ]; then
-            warn "cloudflared 不健康 (ready=${cf_ready:-null})，重启中..."
-            kill -9 $(pgrep -f "$cf_bin") 2>/dev/null || true
-            sleep 2
-            > "$WORK_DIR/data/cloudflared.log"
-            TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --no-autoupdate --edge-ip-version auto --ha-connections 4 --protocol quic --metrics 127.0.0.1:20241 run >>"$WORK_DIR/data/cloudflared.log" 2>&1 &
-            sleep 5
-            info "cloudflared 已重启"
-        else
-            sub "cloudflared 健康 (ready=$cf_ready)"
-        fi
     fi
 
     sleep 3600
