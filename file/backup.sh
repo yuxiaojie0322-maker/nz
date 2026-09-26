@@ -116,6 +116,8 @@ ok "其他数据文件复制完成"
 
 # ---------- 8. 清理副本中的历史数据 ----------
 if [ -f "$DB_BACKUP" ]; then
+    info "清理服务监控历史 service_histories..."
+    sqlite3 "$DB_BACKUP" ".timeout 60000" "DELETE FROM service_histories;" >/dev/null 2>&1 || true
     info "清理 ${TRANSFERS_KEEP_DAYS} 天前的 transfers 记录..."
     sqlite3 "$DB_BACKUP" ".timeout 60000" \
         "DELETE FROM transfers WHERE created_at < date('now','-${TRANSFERS_KEEP_DAYS} days');" \
