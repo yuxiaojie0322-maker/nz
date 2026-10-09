@@ -2,8 +2,8 @@
 # Nezha 启动脚本
 
 export TZ='Asia/Shanghai'
-export GOMEMLIMIT=80MiB
-export GOGC=50
+export GOMEMLIMIT=90MiB
+export GOGC=100
 WORK_DIR=/app
 
 # 清理上一轮可能残留的临时目录
@@ -311,7 +311,7 @@ start_nginx_cloudflared() {
             mv "$DL_TMP/$cf_bin" "$WORK_DIR/$cf_bin"
         fi
         info "启动 cloudflared..."
-        GOMEMLIMIT=35MiB GOGC=50 TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate run >/dev/null 2>&1 &
+        GOMEMLIMIT=35MiB GOGC=100 TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate run >/dev/null 2>&1 &
     fi
 
     ok "nginx + cloudflared 启动完成"
@@ -319,8 +319,8 @@ start_nginx_cloudflared() {
 
 # ========== 启动 dashboard ==========
 start_dashboard() {
-    info "启动 dashboard (轻量内存模式: GOMEMLIMIT=80MiB GOGC=50)..."
-    GOMEMLIMIT=80MiB GOGC=50 nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
+    info "启动 dashboard (轻量内存模式: GOMEMLIMIT=90MiB GOGC=100)..."
+    GOMEMLIMIT=90MiB GOGC=100 nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
     ok "dashboard 启动完成"
 }
 
@@ -328,9 +328,12 @@ start_dashboard() {
 start_agent() {
     # ---- 情况 1：config.yml 存在（从备份恢复） ----
     if [ -f "$WORK_DIR/config.yml" ]; then
-        sub "使用现有 config.yml（从备份恢复）"
+        sub "使用现有 config.yml（从备份恢复），优化低开销采集模式..."
+        sed -i 's/skip_procs_count: false/skip_procs_count: true/g' "$WORK_DIR/config.yml" 2>/dev/null || true
+        sed -i 's/skip_connection_count: false/skip_connection_count: true/g' "$WORK_DIR/config.yml" 2>/dev/null || true
+        sed -i 's/report_delay: [0-9]*/report_delay: 5/g' "$WORK_DIR/config.yml" 2>/dev/null || true
         info "启动 agent..."
-        GOMEMLIMIT=20MiB GOGC=50 nohup ./nezha-agent >/dev/null 2>&1 &
+        GOMEMLIMIT=20MiB GOGC=100 nohup ./nezha-agent >/dev/null 2>&1 &
         ok "agent 启动完成"
         return
     fi
@@ -367,10 +370,10 @@ disable_send_query: false
 gpu: false
 insecure_tls: false
 ip_report_period: 1800
-report_delay: 4
+report_delay: 5
 server: $ARGO_DOMAIN:443
-skip_connection_count: false
-skip_procs_count: false
+skip_connection_count: true
+skip_procs_count: true
 temperature: false
 tls: ${NZ_TLS:-true}
 use_gitee_to_upgrade: false
@@ -379,7 +382,7 @@ uuid: $NZ_UUID
 EOF
 
     info "启动 agent..."
-    GOMEMLIMIT=20MiB GOGC=50 nohup ./nezha-agent >/dev/null 2>&1 &
+    GOMEMLIMIT=20MiB GOGC=100 nohup ./nezha-agent >/dev/null 2>&1 &
     ok "agent 启动完成"
 }
 
