@@ -67,8 +67,8 @@ if [ "$updated" -eq 1 ]; then
     info "重启服务..."
     pkill -f "dashboard-linux-${ARCH}|nezha-agent" 2>/dev/null || true
     sleep 1
-    nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
-    nohup ./nezha-agent >/dev/null 2>&1 &
+    GOMEMLIMIT=75MiB nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
+    GOMEMLIMIT=35MiB nohup ./nezha-agent >/dev/null 2>&1 &
     ok "更新完成"
 else
     sub "已是最新版本"

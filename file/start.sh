@@ -2,6 +2,7 @@
 # Nezha 启动脚本
 
 export TZ='Asia/Shanghai'
+export GODEBUG=madvdontneed=1
 WORK_DIR=/app
 
 # 清理上一轮可能残留的临时目录
@@ -309,7 +310,7 @@ start_nginx_cloudflared() {
             mv "$DL_TMP/$cf_bin" "$WORK_DIR/$cf_bin"
         fi
         info "启动 cloudflared..."
-        TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --protocol http2 run >/dev/null 2>&1 &
+        GOMEMLIMIT=35MiB TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --protocol http2 --no-autoupdate run >/dev/null 2>&1 &
     fi
 
     ok "nginx + cloudflared 启动完成"
@@ -318,7 +319,7 @@ start_nginx_cloudflared() {
 # ========== 启动 dashboard ==========
 start_dashboard() {
     info "启动 dashboard..."
-    nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
+    GOMEMLIMIT=75MiB nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
     ok "dashboard 启动完成"
 }
 
@@ -328,7 +329,7 @@ start_agent() {
     if [ -f "$WORK_DIR/config.yml" ]; then
         sub "使用现有 config.yml（从备份恢复）"
         info "启动 agent..."
-        nohup ./nezha-agent >/dev/null 2>&1 &
+        GOMEMLIMIT=35MiB nohup ./nezha-agent >/dev/null 2>&1 &
         ok "agent 启动完成"
         return
     fi
@@ -377,7 +378,7 @@ uuid: $NZ_UUID
 EOF
 
     info "启动 agent..."
-    nohup ./nezha-agent >/dev/null 2>&1 &
+    GOMEMLIMIT=35MiB nohup ./nezha-agent >/dev/null 2>&1 &
     ok "agent 启动完成"
 }
 
