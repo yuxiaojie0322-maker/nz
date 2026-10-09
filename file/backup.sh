@@ -62,10 +62,8 @@ sub "transfers 保留天数: $TRANSFERS_KEEP_DAYS"
 
 # ---------- 6. 在线备份数据库 ----------
 if [ -f "$DB_FILE" ]; then
-    info "清理活跃数据库 3 天前的 service_histories 以释放空间..."
-    sqlite3 "$DB_FILE" ".timeout 10000" "DELETE FROM service_histories WHERE created_at < datetime('now', '-3 days');" >/dev/null 2>&1 || true
-
     info "备份数据库（在线方式）..."
+
     sqlite3 "$DB_FILE" "PRAGMA wal_checkpoint(PASSIVE);" >/dev/null 2>&1 || true
 
     DB_OK=0

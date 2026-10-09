@@ -2,8 +2,6 @@
 # Nezha 启动脚本
 
 export TZ='Asia/Shanghai'
-export GOMEMLIMIT=90MiB
-export GOGC=100
 WORK_DIR=/app
 
 # 清理上一轮可能残留的临时目录
@@ -105,8 +103,8 @@ map $real_ip $final_ip {
 
 upstream dashboard {
     server 127.0.0.1:8008;
-    keepalive 16;
-    keepalive_requests 1000;
+    keepalive 64;
+    keepalive_requests 2000;
 }
 EOF
 
@@ -119,7 +117,7 @@ server {
     ssl_certificate     $WORK_DIR/nezha.pem;
     ssl_certificate_key $WORK_DIR/nezha.key;
     ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:1m;
+    ssl_session_cache shared:SSL:2m;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     underscores_in_headers on;
@@ -142,8 +140,8 @@ server {
         grpc_read_timeout 600s;
         grpc_send_timeout 600s;
         grpc_socket_keepalive on;
-        client_max_body_size 2m;
-        grpc_buffer_size 64k;
+        client_max_body_size 5m;
+        grpc_buffer_size 128k;
         grpc_pass grpc://dashboard;
     }
 
@@ -166,8 +164,8 @@ server {
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         proxy_buffer_size 16k;
-        proxy_buffers 4 32k;
-        proxy_busy_buffers_size 32k;
+        proxy_buffers 4 64k;
+        proxy_busy_buffers_size 64k;
         proxy_max_temp_file_size 0;
         proxy_pass http://127.0.0.1:8008;
     }
@@ -200,8 +198,8 @@ server {
         grpc_read_timeout 600s;
         grpc_send_timeout 600s;
         grpc_socket_keepalive on;
-        client_max_body_size 2m;
-        grpc_buffer_size 64k;
+        client_max_body_size 5m;
+        grpc_buffer_size 128k;
         grpc_pass grpc://dashboard;
     }
 
@@ -224,8 +222,8 @@ server {
         proxy_read_timeout 3600s;
         proxy_send_timeout 3600s;
         proxy_buffer_size 16k;
-        proxy_buffers 4 32k;
-        proxy_busy_buffers_size 32k;
+        proxy_buffers 4 64k;
+        proxy_busy_buffers_size 64k;
         proxy_max_temp_file_size 0;
         proxy_pass http://127.0.0.1:8008;
     }
@@ -241,13 +239,13 @@ optimize_nginx_main_conf() {
     cat > /etc/nginx/nginx.conf << 'NINXEOF'
 user  nginx;
 worker_processes  1;
-worker_rlimit_nofile 2048;
+worker_rlimit_nofile 4096;
 
-error_log  /var/log/nginx/error.log warn;
+error_log  /var/log/nginx/error.log notice;
 pid        /run/nginx.pid;
 
 events {
-    worker_connections  512;
+    worker_connections  1024;
 }
 
 http {
@@ -258,16 +256,16 @@ http {
                       '$status $body_bytes_sent "$http_referer" '
                       '"$http_user_agent" "$http_x_forwarded_for"';
 
-    access_log  off;
+    access_log  /var/log/nginx/access.log  main;
 
     sendfile        on;
     keepalive_timeout  65;
-    http2_max_concurrent_streams 128;
+    http2_max_concurrent_streams 256;
 
     include /etc/nginx/conf.d/*.conf;
 }
 NINXEOF
-    ok "nginx 主配置优化完成 (单worker轻量模式)"
+    ok "nginx 主配置优化完成"
 }
 
 # ========== 环境变量检查 ==========
@@ -311,7 +309,7 @@ start_nginx_cloudflared() {
             mv "$DL_TMP/$cf_bin" "$WORK_DIR/$cf_bin"
         fi
         info "启动 cloudflared..."
-        GOMEMLIMIT=35MiB GOGC=100 TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate run >/dev/null 2>&1 &
+        TUNNEL_TOKEN="$ARGO_AUTH" nohup ./$cf_bin tunnel --protocol http2 run >/dev/null 2>&1 &
     fi
 
     ok "nginx + cloudflared 启动完成"
@@ -319,8 +317,8 @@ start_nginx_cloudflared() {
 
 # ========== 启动 dashboard ==========
 start_dashboard() {
-    info "启动 dashboard (轻量内存模式: GOMEMLIMIT=90MiB GOGC=100)..."
-    GOMEMLIMIT=90MiB GOGC=100 nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
+    info "启动 dashboard..."
+    nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
     ok "dashboard 启动完成"
 }
 
@@ -328,12 +326,9 @@ start_dashboard() {
 start_agent() {
     # ---- 情况 1：config.yml 存在（从备份恢复） ----
     if [ -f "$WORK_DIR/config.yml" ]; then
-        sub "使用现有 config.yml（从备份恢复），优化低开销采集模式..."
-        sed -i 's/skip_procs_count: false/skip_procs_count: true/g' "$WORK_DIR/config.yml" 2>/dev/null || true
-        sed -i 's/skip_connection_count: false/skip_connection_count: true/g' "$WORK_DIR/config.yml" 2>/dev/null || true
-        sed -i 's/report_delay: [0-9]*/report_delay: 5/g' "$WORK_DIR/config.yml" 2>/dev/null || true
+        sub "使用现有 config.yml（从备份恢复）"
         info "启动 agent..."
-        GOMEMLIMIT=20MiB GOGC=100 nohup ./nezha-agent >/dev/null 2>&1 &
+        nohup ./nezha-agent >/dev/null 2>&1 &
         ok "agent 启动完成"
         return
     fi
@@ -370,10 +365,10 @@ disable_send_query: false
 gpu: false
 insecure_tls: false
 ip_report_period: 1800
-report_delay: 5
+report_delay: 4
 server: $ARGO_DOMAIN:443
-skip_connection_count: true
-skip_procs_count: true
+skip_connection_count: false
+skip_procs_count: false
 temperature: false
 tls: ${NZ_TLS:-true}
 use_gitee_to_upgrade: false
@@ -382,7 +377,7 @@ uuid: $NZ_UUID
 EOF
 
     info "启动 agent..."
-    GOMEMLIMIT=20MiB GOGC=100 nohup ./nezha-agent >/dev/null 2>&1 &
+    nohup ./nezha-agent >/dev/null 2>&1 &
     ok "agent 启动完成"
 }
 
@@ -538,14 +533,6 @@ while true; do
         else
             sub "跳过备份: $reason"
         fi
-    fi
-
-    # ---------- 运行时 SQLite 瘦身与内存释放 ----------
-    if [ -f "$WORK_DIR/data/sqlite.db" ]; then
-        sub "优化活跃数据库并释放 WAL 缓存..."
-        sqlite3 "$WORK_DIR/data/sqlite.db" ".timeout 10000" "DELETE FROM service_histories WHERE created_at < datetime('now', '-3 days');" >/dev/null 2>&1 || true
-        sqlite3 "$WORK_DIR/data/sqlite.db" ".timeout 10000" "DELETE FROM transfers WHERE created_at < date('now', '-7 days');" >/dev/null 2>&1 || true
-        sqlite3 "$WORK_DIR/data/sqlite.db" ".timeout 10000" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1 || true
     fi
 
     # ---------- 版本更新检查 ----------

@@ -17,7 +17,7 @@ pkill -f "dashboard-linux-${ARCH}" 2>/dev/null || true
 sleep 1
 
 info "启动 dashboard..."
-GOMEMLIMIT=90MiB GOGC=100 nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
+nohup ./dashboard-linux-${ARCH} >/dev/null 2>&1 &
 sleep 2
 
 ok "dashboard 已重启"
